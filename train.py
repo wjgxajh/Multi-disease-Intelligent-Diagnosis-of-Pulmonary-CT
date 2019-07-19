@@ -14,7 +14,7 @@
 import os
 import time
 import shutil
-import numpy as np
+import pandas as pd
 import tensorflow as tf
 import core.utils as utils
 from tqdm import tqdm
@@ -22,12 +22,17 @@ from core.dataset import Dataset
 from core.yolov3 import YOLOV3
 from core.config import cfg
 
-
+import load_itk as load_itk
+from tqdm import tqdm
+import numpy as np
+FLAGS = tf.app.flags.FLAGS
+tf.app.flags.DEFINE_string('train_data_path', 'data/train/', '')
+data_set = Dataset('train')
 class YoloTrain(object):
     def __init__(self):
         self.anchor_per_scale    = cfg.YOLO.ANCHOR_PER_SCALE
-        self.classes             = utils.read_class_names(cfg.YOLO.CLASSES)
-        self.num_classes         = len(self.classes)
+        # self.classes             = utils.read_class_names(cfg.YOLO.CLASSES)
+        # self.num_classes         = len(self.classes)
         self.learn_rate_init     = cfg.TRAIN.LEARN_RATE_INIT
         self.learn_rate_end      = cfg.TRAIN.LEARN_RATE_END
         self.first_stage_epochs  = cfg.TRAIN.FISRT_STAGE_EPOCHS
@@ -38,9 +43,7 @@ class YoloTrain(object):
         self.moving_ave_decay    = cfg.YOLO.MOVING_AVE_DECAY
         self.max_bbox_per_scale  = 150
         self.train_logdir        = "./data/log/train"
-        self.trainset            = Dataset('train')
-        self.testset             = Dataset('test')
-        self.steps_per_period    = len(self.trainset)
+        self.steps_per_period    = 100
         self.sess                = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
 
         with tf.name_scope('define_input'):
@@ -138,50 +141,58 @@ class YoloTrain(object):
             else:
                 train_op = self.train_op_with_all_variables
 
-            pbar = tqdm(self.trainset)
-            train_epoch_loss, test_epoch_loss = [], []
 
-            for train_data in pbar:
-                _, summary, train_step_loss, global_step_val = self.sess.run(
-                    [train_op, self.write_op, self.loss, self.global_step],feed_dict={
-                                                self.input_data:   train_data[0],
-                                                self.label_sbbox:  train_data[1],
-                                                self.label_mbbox:  train_data[2],
-                                                self.label_lbbox:  train_data[3],
-                                                self.true_sbboxes: train_data[4],
-                                                self.true_mbboxes: train_data[5],
-                                                self.true_lbboxes: train_data[6],
-                                                self.trainable:    True,
-                })
+            train_epoch_loss = []
+            anns_path = os.path.abspath('data/chestCT_round1_annotation.csv')
+            anns_all = pd.read_csv(anns_path)
+            for parent, dirnames, filenames in os.walk(FLAGS.train_data_path):
+                for filename in filenames:
+                    if filename.endswith('mhd'):
+                        seriesuid = filename[0:-4]
+                        ct, origin, spacing, boxes = load_itk.getConfigData(seriesuid=seriesuid, anns_all=anns_all,file_path=FLAGS.train_data_path)
+                        if np.all(ct == None):
+                            continue;
+                        ct_clip = ct.clip(min=-1000, max=600)
+                        for num in tqdm(range(ct_clip.shape[0])):
+                            image = ct_clip[num]
+                            box = [];
+                            for i in boxes:
+                                if abs(i[0] - num) <= 0.5:
+                                    box = boxes[num]
+                                    box = box[1:6]
+                                    break;
+                            image, box = utils.image_preporcess(np.copy(image),
+                                                                   [cfg.TRAIN.INPUT_SIZE, cfg.TRAIN.INPUT_SIZE],
+                                                                   np.copy(box))
+                            label_sbbox, label_mbbox, label_lbbox, sbboxes, mbboxes, lbboxes = Dataset.preprocess_true_boxes(self=data_set, bboxes=box)
+                            _, summary, train_step_loss, global_step_val = self.sess.run(
+                                [train_op, self.write_op, self.loss, self.global_step], feed_dict={
+                                    self.input_data: image,
+                                    self.label_sbbox: label_sbbox,
+                                    self.label_mbbox: label_mbbox,
+                                    self.label_lbbox: label_lbbox,
+                                    self.true_sbboxes: sbboxes,
+                                    self.true_mbboxes: mbboxes,
+                                    self.true_lbboxes: lbboxes,
+                                    self.trainable: True,
+                                })
 
-                train_epoch_loss.append(train_step_loss)
-                self.summary_writer.add_summary(summary, global_step_val)
-                pbar.set_description("train loss: %.2f" %train_step_loss)
+                            train_epoch_loss.append(train_step_loss)
+                            self.summary_writer.add_summary(summary, global_step_val)
+                            print("train loss: %.2f" % train_step_loss)
 
-            for test_data in self.testset:
-                test_step_loss = self.sess.run( self.loss, feed_dict={
-                                                self.input_data:   test_data[0],
-                                                self.label_sbbox:  test_data[1],
-                                                self.label_mbbox:  test_data[2],
-                                                self.label_lbbox:  test_data[3],
-                                                self.true_sbboxes: test_data[4],
-                                                self.true_mbboxes: test_data[5],
-                                                self.true_lbboxes: test_data[6],
-                                                self.trainable:    False,
-                })
 
-                test_epoch_loss.append(test_step_loss)
-
-            train_epoch_loss, test_epoch_loss = np.mean(train_epoch_loss), np.mean(test_epoch_loss)
-            ckpt_file = "./checkpoint/yolov3_test_loss=%.4f.ckpt" % test_epoch_loss
+            train_epoch_loss = np.mean(train_epoch_loss)
+            ckpt_file = "./checkpoint/model2019.ckpt"
             log_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-            print("=> Epoch: %2d Time: %s Train loss: %.2f Test loss: %.2f Saving %s ..."
-                            %(epoch, log_time, train_epoch_loss, test_epoch_loss, ckpt_file))
+            print("=> Epoch: %2d Time: %s Train loss: %.2f Saving %s ..."
+                            %(epoch, log_time, train_epoch_loss, ckpt_file))
             self.saver.save(self.sess, ckpt_file, global_step=epoch)
 
 
 
-if __name__ == '__main__': YoloTrain().train()
+if __name__ == '__main__':
+    YoloTrain().train()
 
 
 

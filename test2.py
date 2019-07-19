@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 import load_itk as load_itk
 from tqdm import tqdm
+import pandas as pd
 # import locality_aware_nms as nms_locality
 #import lanms
 
@@ -19,7 +20,7 @@ FLAGS = tf.app.flags.FLAGS
 
 
 
-def resize_image(im, max_side_len=2400):#调整图片大小
+def resize_image(im, max_side_len=512):#调整图片大小
     '''
     resize image to a size multiple of 32 which is required by the network
     :param im: the resized image
@@ -119,12 +120,11 @@ def main(argv=None):
             model_path = os.path.join(FLAGS.checkpoint_path, os.path.basename(ckpt_state.model_checkpoint_path))
             print('Restore from {}'.format(model_path))
             saver.restore(sess, model_path)
-
+            csv = pd.read_csv('data/result.csv')
             for parent, dirnames, filenames in os.walk(FLAGS.test_data_path):
                 for filename in filenames:
                     if filename.endswith('mhd'):
                         seriesuid = filename[0:-4]
-                        # file_path = os.path.join(parent,filename)
                         ct, origin, spacing = load_itk.load_itk(file_name=seriesuid, file_path=FLAGS.test_data_path)
                         ct_clip = ct.clip(min=-1000, max=600)
                         for num in tqdm(range(ct_clip.shape[0])):
@@ -132,8 +132,15 @@ def main(argv=None):
                             im_resized, (ratio_h, ratio_w) = resize_image(img) #归一化
                             timer = {'net': 0, 'restore': 0, 'nms': 0}
                             start = time.time()
-                            sess.run([f_score, f_geometry], feed_dict={input_images: [im_resized]})
+                            coordX,coordY,coordZ, classnum, probability = sess.run([f_score, f_geometry], feed_dict={input_images: [im_resized]})
+                            # ann_df.coordX = (ann_df.coordX - origin[2]) / spacing[2]
+                            # ann_df.coordY = (ann_df.coordY - origin[1]) / spacing[1]
+                            # ann_df.coordZ = (ann_df.coordZ - origin[0]) / spacing[0]
+                            coordX = coordX * spacing[2] + origin[2]
+                            coordY = coordY * spacing[1] + origin[1]
+                            coordZ = coordZ * spacing[0] + origin[0]
                             timer['net'] = time.time() - start
+                            csv.writerow([seriesuid, coordX, coordY, coordZ, classnum, probability])
 
             # im_fn_list = get_images()
             # for im_fn in im_fn_list:

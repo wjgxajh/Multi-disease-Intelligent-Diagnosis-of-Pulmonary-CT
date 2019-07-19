@@ -24,8 +24,7 @@ class YOLOV3(object):
     def __init__(self, input_data, trainable):
 
         self.trainable        = trainable
-        self.classes          = utils.read_class_names(cfg.YOLO.CLASSES)
-        self.num_class        = len(self.classes)
+        self.num_class        = 4
         self.strides          = np.array(cfg.YOLO.STRIDES)
         self.anchors          = utils.get_anchors(cfg.YOLO.ANCHORS)
         self.anchor_per_scale = cfg.YOLO.ANCHOR_PER_SCALE

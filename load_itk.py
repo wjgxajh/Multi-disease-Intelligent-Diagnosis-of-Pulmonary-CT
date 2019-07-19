@@ -34,6 +34,38 @@ def load_itk(file_name, file_path):
     return ct_scan, origin, spacing
 
 
+def getConfigData(seriesuid, anns_all, file_path,
+              clipmin=-1000, clipmax=600):
+
+    seriesuid = str(seriesuid)
+    ann_df = anns_all.query('seriesuid == "%s"' % seriesuid).copy()  # 标注当中的数据
+    ct, origin, spacing = load_itk(file_name=seriesuid, file_path=file_path)
+
+    if ann_df.shape[0] == 0:
+        print('no annoatation')
+        del ct
+        return None, None, None, ann_df
+
+    boxes = []
+    num = (ann_df.coordZ - origin[0]) / spacing[0]
+    for num in tqdm(range(ann_df.shape[0])):
+        ann = ann_df.values[num]
+        boxes.append([(ann[3] - origin[0])/spacing[0], ann[1] - ann[4] / 2, ann[2] - ann[5] / 2, ann[1] + ann[4] / 2,ann[2] + ann[5] / 2, ann[7]])
+
+    # coordinate transform: world to voxel
+    # 世界、体素坐标的转换：
+    # 体素坐标 = （标注中的坐标-mhd中的原点坐标）/mhd中的间距
+    # 体素直径 = 标注中的直径/mhd中的间距
+    ann_df.coordX = (ann_df.coordX - origin[2]) / spacing[2]
+    ann_df.coordY = (ann_df.coordY - origin[1]) / spacing[1]
+    ann_df.coordZ = (ann_df.coordZ - origin[0]) / spacing[0]
+
+    ann_df.diameterX = ann_df.diameterX / spacing[2]
+    ann_df.diameterY = ann_df.diameterY / spacing[1]
+    ann_df.diameterZ = ann_df.diameterZ / spacing[0]
+    ann_df['labelstr'] = ann_df.label.apply(lambda x: label_dict[x])
+    return ct, origin, spacing, boxes
+
 def plot_scan(seriesuid, anns_all, file_path, plot_path='./visualization/', 
               clipmin=-1000, clipmax=600, only_df=False, return_ct=False):
     '''
